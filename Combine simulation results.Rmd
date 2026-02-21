@@ -1,0 +1,150 @@
+---
+title: "Combine simulation results"
+author: "Simulation Results"
+date: "`r Sys.Date()`"
+output:
+  pdf_document:
+    toc: true
+  html_document:
+    toc: true
+    toc_float: true
+    theme: cosmo
+    code_folding: hide
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(
+  echo = TRUE,
+  warning = FALSE, 
+  message = FALSE,
+  fig.width = 12,
+  fig.height = 8
+)
+
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(knitr)
+library(kableExtra)
+library(viridis)  
+library(here)  
+library(purrr)
+```
+
+## Average over 50 runs and 2500 replications
+
+```{r load_data, echo=FALSE}
+# Set paths
+data_path <- "C:/Users/yunji/Desktop/PheNorm/R/Simulation/simulation_results3"  
+epsilon_path <- "C:/Users/yunji/Desktop/PheNorm/R/Simulation/simulation_results6"
+epsilon_path2 <- "C:/Users/yunji/Desktop/PheNorm/R/Simulation/simulation_results7"
+# Function to load RData file and return the results object
+load_rdata_results <- function(file_path) {
+  env <- new.env()
+  load(file_path, envir = env)
+  
+  if("results" %in% ls(env)) {
+    results <- env$results
+    if("auc" %in% names(results)) {
+      results$auc <- as.numeric(results$auc)
+    }
+    for(col in names(results)) {
+      if(inherits(results[[col]], c("auc", "roc", "performance"))) {
+        results[[col]] <- as.numeric(results[[col]])
+      }
+    }
+    results$run_file <- basename(file_path)
+    results$run_number <- as.numeric(gsub(".*run(\\d+)\\.RData", "\\1", basename(file_path)))
+    return(results)
+  } else {
+    warning(paste("No 'results' object found in", file_path))
+    return(NULL)
+  }
+}
+
+# Function to load epsilon strategy results
+load_epsilon_results <- function(file_path) {
+  env <- new.env()
+  load(file_path, envir = env)
+  
+  if("results_epsilon" %in% ls(env)) {
+    results <- env$results_epsilon
+    if("auc" %in% names(results)) {
+      results$auc <- as.numeric(results$auc)
+    }
+    for(col in names(results)) {
+      if(inherits(results[[col]], c("auc", "roc", "performance"))) {
+        results[[col]] <- as.numeric(results[[col]])
+      }
+    }
+    results$run_file <- basename(file_path)
+    results$run_number <- as.numeric(gsub(".*run(\\d+)\\.RData", "\\1", basename(file_path)))
+    return(results)
+  } else {
+    warning(paste("No 'results_epsilon' object found in", file_path))
+    return(NULL)
+  }
+}
+
+# Load original results
+rdata_files <- list.files(path = data_path, 
+                         pattern = "simulation_results_run.*\\.RData$", 
+                         full.names = TRUE)
+print(paste("Found", length(rdata_files), "original RData files"))
+all_results_original <- map_dfr(rdata_files, load_rdata_results)
+
+# Load epsilon results
+epsilon_files <- list.files(path = epsilon_path, 
+                            pattern = "simulation_results_epsilon_run.*\\.RData$", 
+                            full.names = TRUE)
+print(paste("Found", length(epsilon_files), "epsilon RData files"))
+all_results_epsilon <- map_dfr(epsilon_files, load_epsilon_results)
+
+# Filter epsilon results to LDA + rare_noninfo only
+all_results_epsilon_filtered <- all_results_epsilon %>%
+  filter(data_type == "LDA", scenario == "rare_noninfo")
+
+print(paste("Epsilon results (LDA + rare_noninfo):", nrow(all_results_epsilon_filtered)))
+
+# Remove LDA + rare_noninfo from original results
+all_results_original_filtered <- all_results_original %>%
+  filter(!(data_type == "LDA" & scenario == "rare_noninfo"))
+
+print(paste("Original results after removing LDA + rare_noninfo:", nrow(all_results_original_filtered)))
+
+# Combine datasets
+all_results <- bind_rows(all_results_original_filtered, all_results_epsilon_filtered)
+
+print(paste("Total observations loaded:", nrow(all_results)))
+print(paste("Total runs:", n_distinct(all_results$run_number)))
+
+# Check combinations
+combinations <- all_results %>% 
+  group_by(data_type, scenario, algorithm, set) %>% 
+  summarise(n_obs = n(), n_runs = n_distinct(run_number), .groups = 'drop')
+print(paste("Unique combinations:", nrow(combinations)))
+
+# Calculate final summary
+combined_data <- all_results %>%
+  group_by(data_type, scenario, algorithm, set) %>%
+  summarise(
+    across(c(f1, precision, recall, accuracy, prob_mse, prob_mae, prob_correlation, auc),
+           list(mean = ~mean(.x, na.rm = TRUE),
+                sd = ~sd(.x, na.rm = TRUE)),
+           .names = "{.col}_{.fn}"),
+    n_total_replications = n(),
+    n_runs = n_distinct(run_number),
+    .groups = 'drop'
+  ) %>%
+  mutate(across(where(is.numeric) & !starts_with("n_"), ~round(.x, 6)))
+
+# Save results
+simulation_dir <- "C:/Users/yunji/Desktop/PheNorm/R/Simulation"
+output_path <- file.path(simulation_dir, "combined_data.csv")
+write.csv(combined_data, output_path, row.names = FALSE)
+print(paste("Combined data saved to:", output_path))
+print(paste("Final dataset dimensions:", nrow(combined_data), "rows x", ncol(combined_data), "columns"))
+```
+

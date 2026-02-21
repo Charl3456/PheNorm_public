@@ -1,0 +1,1151 @@
+---
+title: "Table generation"
+output: pdf_document
+date: "2025-06-09"
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+library(dplyr)
+library(knitr)
+library(kableExtra)
+library(ggplot2)
+library(gridExtra)
+library(grid)
+library(tidyr)
+library(RColorBrewer)
+library(readr)
+```
+
+## Ideal Data Generation Table Generation
+
+```{r ideal}
+data <- read_csv("combined_data.csv")
+test_data <- data %>% filter(set == "test")
+
+format_mean_sd <- function(mean_val, sd_val, decimals = 3) {
+  if (is.na(mean_val) || is.na(sd_val)) {
+    return("NA")
+  }
+  sprintf("%.3f (%.3f)", round(mean_val, decimals), round(sd_val, decimals))
+}
+
+algorithm_mapping <- list(
+  "icd_logit" = "ICD Logit (v1)",           
+  "map" = "MAP (v1)",                       
+  "phenorm" = "PheNorm (v1)",               
+  "surelda" = "SureLDA (v1)",               
+  "surelda_map" = "SureLDA (v2)",
+  "surelda_phenorm" = "SureLDA (v3)",
+  "surelda_map_p" = "SureLDA (v4)",         
+  "surelda_map_prior" = "MAP (v2)",         
+  "surelda_prior" = "PheNorm (v2)"
+)
+
+scenario_mapping <- list(
+  "nonrare_info" = "Non-rare, Informative Scenario",
+  "nonrare_noninfo" = "Non-rare, Non-informative Scenario",
+  "rare_info" = "Rare, Informative Scenario (Simplified Data)",
+  "rare_noninfo" = "Rare, Non-informative Scenario"
+)
+
+figure_naming <- list(
+  "rare_info" = list(number = 1, name = "rare_informative_simplified"),
+  "rare_noninfo" = list(number = 2, name = "rare_non-informative_simplified"),
+  "nonrare_info" = list(number = 3, name = "nonrare_informative_simplified"),
+  "nonrare_noninfo" = list(number = 4, name = "nonrare_non-informative_simplified")
+)
+
+create_publication_table <- function(scenario_name) {
+  scenario_data <- test_data %>% filter(scenario == scenario_name)
+  
+  algorithm_order <- c(
+    "icd_logit",
+    "phenorm",
+    "surelda_prior",
+    "map",
+    "surelda_map_prior",
+    "surelda",
+    "surelda_map",
+    "surelda_phenorm",
+    "surelda_map_p"
+  )
+  
+  result_table <- data.frame(
+    Algorithm = character(),
+    AUC = character(),
+    F1 = character(),
+    Precision = character(),
+    Recall = character(),
+    `Prob MSE` = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  for (algorithm in algorithm_order) {
+    row_data <- scenario_data %>% filter(algorithm == !!algorithm)
+    
+    if (nrow(row_data) > 0) {
+      row_data <- row_data[1, ]
+      alg_name <- algorithm_mapping[[algorithm]]
+      if (is.null(alg_name)) alg_name <- algorithm
+      
+      new_row <- data.frame(
+        Algorithm = alg_name,
+        AUC = format_mean_sd(row_data$auc_mean, row_data$auc_sd),
+        F1 = format_mean_sd(row_data$f1_mean, row_data$f1_sd),
+        Precision = format_mean_sd(row_data$precision_mean, row_data$precision_sd),
+        Recall = format_mean_sd(row_data$recall_mean, row_data$recall_sd),
+        Prob.MSE = format_mean_sd(row_data$prob_mse_mean, row_data$prob_mse_sd),
+        stringsAsFactors = FALSE
+      )
+      
+      result_table <- rbind(result_table, new_row)
+    }
+  }
+  
+  return(result_table)
+}
+
+save_table_as_image <- function(scenario_name, output_dir = "thesis/table_images", 
+                                width = 12, height = 6, dpi = 300) {
+  
+  if (!dir.exists(output_dir)) {
+    dir.create(output_dir, recursive = TRUE)
+  }
+  
+  table_df <- create_publication_table(scenario_name)
+  scenario_title <- scenario_mapping[[scenario_name]]
+  
+  figure_info <- figure_naming[[scenario_name]]
+  if (!is.null(figure_info)) {
+    base_name <- sprintf("figure_table_%d_%s", figure_info$number, figure_info$name)
+  } else {
+    base_name <- sprintf("figure_table_%s", gsub("[^A-Za-z0-9_-]", "_", scenario_name))
+  }
+  
+  table_grob <- tableGrob(table_df, rows = NULL,
+    theme = ttheme_default(
+      core = list(
+        fg_params = list(fontsize = 11, fontfamily = "serif"),
+        bg_params = list(fill = c("white", "#f8f9fa"), alpha = 1),
+        padding = unit(c(6, 6), "mm")
+      ),
+      colhead = list(
+        fg_params = list(fontsize = 12, fontface = "bold", fontfamily = "serif", col = "white"),
+        bg_params = list(fill = "#2c3e50", alpha = 1),
+        padding = unit(c(6, 6), "mm")
+      )
+    )
+  )
+  
+  title_grob <- textGrob(
+    paste("Table: Performance metrics for each algorithm in the", tolower(scenario_title)),
+    gp = gpar(fontsize = 14, fontface = "bold", fontfamily = "serif"),
+    x = 0.5, y = 0.95
+  )
+  
+  subtitle_grob <- textGrob(
+    "All metrics are reported as mean (SD) over 2,500 replications",
+    gp = gpar(fontsize = 10, fontfamily = "serif", col = "grey30"),
+    x = 0.5, y = 0.05
+  )
+  
+  final_grob <- arrangeGrob(title_grob, table_grob, subtitle_grob,
+                           heights = c(0.15, 0.75, 0.10), ncol = 1)
+  
+  png_file <- file.path(output_dir, paste0(base_name, "_table.png"))
+  png(png_file, width = width * dpi, height = height * dpi, res = dpi, bg = "white")
+  grid.draw(final_grob)
+  dev.off()
+  
+  pdf_file <- file.path(output_dir, paste0(base_name, "_table.pdf"))
+  pdf(pdf_file, width = width, height = height)
+  grid.draw(final_grob)
+  dev.off()
+  
+  return(final_grob)
+}
+
+output_dir <- "thesis/performance_tables"
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+scenarios <- unique(test_data$scenario)
+for (scenario in scenarios) {
+  scenario_title <- scenario_mapping[[scenario]]
+  if (is.null(scenario_title)) scenario_title <- scenario
+  
+  figure_info <- figure_naming[[scenario]]
+  if (is.null(figure_info)) {
+    figure_number <- which(scenarios == scenario)
+    figure_name <- gsub("[^A-Za-z0-9_-]", "_", scenario)
+  } else {
+    figure_number <- figure_info$number
+    figure_name <- figure_info$name
+  }
+  
+  table_data <- create_publication_table(scenario)
+  base_name <- sprintf("figure_table_%d_%s", figure_number, figure_name)
+  
+  latex_file <- file.path(output_dir, paste0(base_name, ".tex"))
+  sink(latex_file)
+  latex_table <- kable(table_data, 
+                      format = "latex",
+                      booktabs = TRUE,
+                      row.names = FALSE,
+                      caption = paste("Performance metrics for each algorithm in the", tolower(scenario_title)))
+  cat(latex_table)
+  sink()
+  
+  save_table_as_image(scenario)
+}
+
+comparison_output_dir <- "thesis/comparison_tables"
+if (!dir.exists(comparison_output_dir)) {
+  dir.create(comparison_output_dir, recursive = TRUE)
+}
+
+algorithms <- c(
+  "icd_logit",
+  "phenorm",
+  "surelda_prior",
+  "map",
+  "surelda_map_prior",
+  "surelda",
+  "surelda_map",
+  "surelda_phenorm",
+  "surelda_map_p"
+)
+
+rare_info <- test_data[test_data$scenario == "rare_info", ]
+rare_noninfo <- test_data[test_data$scenario == "rare_noninfo", ]
+
+latex_content <- c(
+  "\\begin{table}[htbp]",
+  "\\centering",
+  "\\caption{Rare Disease Scenarios: Informative vs Non-informative}",
+  "\\begin{tabular}{lccccccc}",
+  "\\hline",
+  "Algorithm & \\multicolumn{3}{c}{AUC} & \\multicolumn{2}{c}{Precision} & \\multicolumn{2}{c}{F1-Score} \\\\",
+  " & Info & Non-info & Reduction & Info & Non-info & Info & Non-info \\\\",
+  "\\hline"
+)
+
+comparison_data <- data.frame()
+
+for (alg in algorithms) {
+  info_row <- rare_info[rare_info$algorithm == alg, ]
+  noninfo_row <- rare_noninfo[rare_noninfo$algorithm == alg, ]
+  
+  if (nrow(info_row) > 0 & nrow(noninfo_row) > 0) {
+    info_row <- info_row[1, ]
+    noninfo_row <- noninfo_row[1, ]
+    
+    alg_name <- algorithm_mapping[[alg]]
+    if (is.null(alg_name)) alg_name <- alg
+    
+    auc_reduction <- round(((info_row$auc_mean - noninfo_row$auc_mean) / info_row$auc_mean) * 100, 1)
+    
+    latex_row <- sprintf("%s & %.3f & %.3f & %.1f\\%% & %.3f & %.3f & %.3f & %.3f \\\\",
+                        alg_name,
+                        info_row$auc_mean, noninfo_row$auc_mean, auc_reduction,
+                        info_row$precision_mean, noninfo_row$precision_mean,
+                        info_row$f1_mean, noninfo_row$f1_mean)
+    
+    latex_content <- c(latex_content, latex_row)
+    
+    new_row <- data.frame(
+      Algorithm = alg_name,
+      AUC_Info = round(info_row$auc_mean, 3),
+      AUC_NonInfo = round(noninfo_row$auc_mean, 3),
+      AUC_Reduction = sprintf("%.1f%%", auc_reduction),
+      Precision_Info = round(info_row$precision_mean, 3),
+      Precision_NonInfo = round(noninfo_row$precision_mean, 3),
+      F1_Info = round(info_row$f1_mean, 3),
+      F1_NonInfo = round(noninfo_row$f1_mean, 3),
+      stringsAsFactors = FALSE
+    )
+    comparison_data <- rbind(comparison_data, new_row)
+  }
+}
+
+comparison_data <- comparison_data[order(comparison_data$AUC_Info, decreasing = TRUE), ]
+
+latex_content <- c(latex_content, "\\hline", "\\end{tabular}", "\\end{table}")
+writeLines(latex_content, file.path(comparison_output_dir, "figure_comparison_rare_scenarios.tex"))
+
+names(comparison_data) <- c("Algorithm", "Info", "Non-info", "Reduction", 
+                           "Info", "Non-info", "Info", "Non-info")
+
+table_grob <- tableGrob(comparison_data, rows = NULL,
+  theme = ttheme_default(
+    core = list(
+      fg_params = list(fontsize = 10, fontfamily = "serif"),
+      bg_params = list(fill = c("white", "#f8f9fa"), alpha = 1),
+      padding = unit(c(4, 4), "mm")
+    ),
+    colhead = list(
+      fg_params = list(fontsize = 11, fontface = "bold", fontfamily = "serif", col = "white"),
+      bg_params = list(fill = "#2c3e50", alpha = 1),
+      padding = unit(c(4, 4), "mm")
+    )
+  )
+)
+
+header_grob <- textGrob("AUC                    Precision        F1-Score",
+  gp = gpar(fontsize = 12, fontface = "bold", fontfamily = "serif"),
+  x = 0.65, y = 0.88)
+
+title_grob <- textGrob("Rare Disease Scenarios: Informative vs Non-informative",
+  gp = gpar(fontsize = 14, fontface = "bold", fontfamily = "serif"),
+  x = 0.5, y = 0.95)
+
+final_grob <- arrangeGrob(title_grob, header_grob, table_grob,
+                         heights = c(0.08, 0.05, 0.87), ncol = 1)
+
+png(file.path(comparison_output_dir, "figure_comparison_rare_scenarios.png"), 
+    width = 14 * 300, height = 8 * 300, res = 300, bg = "white")
+grid.draw(final_grob)
+dev.off()
+
+pdf(file.path(comparison_output_dir, "figure_comparison_rare_scenarios.pdf"), 
+    width = 14, height = 8)
+grid.draw(final_grob)
+dev.off()
+
+nonrare_info <- test_data[test_data$scenario == "nonrare_info", ]
+nonrare_noninfo <- test_data[test_data$scenario == "nonrare_noninfo", ]
+
+latex_content <- c(
+  "\\begin{table}[htbp]",
+  "\\centering",
+  "\\caption{Non-Rare Disease Scenarios: Informative vs Non-informative}",
+  "\\begin{tabular}{lccccccc}",
+  "\\hline",
+  "Algorithm & \\multicolumn{3}{c}{AUC} & \\multicolumn{2}{c}{Precision} & \\multicolumn{2}{c}{F1-Score} \\\\",
+  " & Info & Non-info & Reduction & Info & Non-info & Info & Non-info \\\\",
+  "\\hline"
+)
+
+comparison_data2 <- data.frame()
+
+for (alg in algorithms) {
+  info_row <- nonrare_info[nonrare_info$algorithm == alg, ]
+  noninfo_row <- nonrare_noninfo[nonrare_noninfo$algorithm == alg, ]
+  
+  if (nrow(info_row) > 0 & nrow(noninfo_row) > 0) {
+    info_row <- info_row[1, ]
+    noninfo_row <- noninfo_row[1, ]
+    
+    alg_name <- algorithm_mapping[[alg]]
+    if (is.null(alg_name)) alg_name <- alg
+    
+    auc_reduction <- round(((info_row$auc_mean - noninfo_row$auc_mean) / info_row$auc_mean) * 100, 1)
+    
+    latex_row <- sprintf("%s & %.3f & %.3f & %.1f\\%% & %.3f & %.3f & %.3f & %.3f \\\\",
+                        alg_name,
+                        info_row$auc_mean, noninfo_row$auc_mean, auc_reduction,
+                        info_row$precision_mean, noninfo_row$precision_mean,
+                        info_row$f1_mean, noninfo_row$f1_mean)
+    
+    latex_content <- c(latex_content, latex_row)
+    
+    new_row <- data.frame(
+      Algorithm = alg_name,
+      AUC_Info = round(info_row$auc_mean, 3),
+      AUC_NonInfo = round(noninfo_row$auc_mean, 3),
+      AUC_Reduction = sprintf("%.1f%%", auc_reduction),
+      Precision_Info = round(info_row$precision_mean, 3),
+      Precision_NonInfo = round(noninfo_row$precision_mean, 3),
+      F1_Info = round(info_row$f1_mean, 3),
+      F1_NonInfo = round(noninfo_row$f1_mean, 3),
+      stringsAsFactors = FALSE
+    )
+    comparison_data2 <- rbind(comparison_data2, new_row)
+  }
+}
+
+comparison_data2 <- comparison_data2[order(comparison_data2$AUC_Info, decreasing = TRUE), ]
+
+latex_content <- c(latex_content, "\\hline", "\\end{tabular}", "\\end{table}")
+writeLines(latex_content, file.path(comparison_output_dir, "figure_comparison_nonrare_scenarios.tex"))
+
+names(comparison_data2) <- c("Algorithm", "Info", "Non-info", "Reduction", 
+                            "Info", "Non-info", "Info", "Non-info")
+
+table_grob2 <- tableGrob(comparison_data2, rows = NULL,
+  theme = ttheme_default(
+    core = list(
+      fg_params = list(fontsize = 10, fontfamily = "serif"),
+      bg_params = list(fill = c("white", "#f8f9fa"), alpha = 1),
+      padding = unit(c(4, 4), "mm")
+    ),
+    colhead = list(
+      fg_params = list(fontsize = 11, fontface = "bold", fontfamily = "serif", col = "white"),
+      bg_params = list(fill = "#2c3e50", alpha = 1),
+      padding = unit(c(4, 4), "mm")
+    )
+  )
+)
+
+header_grob2 <- textGrob("AUC                    Precision        F1-Score",
+  gp = gpar(fontsize = 12, fontface = "bold", fontfamily = "serif"),
+  x = 0.65, y = 0.88)
+
+title_grob2 <- textGrob("Non-Rare Disease Scenarios: Informative vs Non-informative",
+  gp = gpar(fontsize = 14, fontface = "bold", fontfamily = "serif"),
+  x = 0.5, y = 0.95)
+
+final_grob2 <- arrangeGrob(title_grob2, header_grob2, table_grob2,
+                          heights = c(0.08, 0.05, 0.87), ncol = 1)
+
+png(file.path(comparison_output_dir, "figure_comparison_nonrare_scenarios.png"), 
+    width = 14 * 300, height = 8 * 300, res = 300, bg = "white")
+grid.draw(final_grob2)
+dev.off()
+
+pdf(file.path(comparison_output_dir, "figure_comparison_nonrare_scenarios.pdf"), 
+    width = 14, height = 8)
+grid.draw(final_grob2)
+dev.off()
+```
+## Performance Figure for Ideal Data Generation
+
+```{r ideal_figure}
+# Phenotyping Algorithm Performance Analysis - R Code
+# Generate 4 publication-ready figures with increased font sizes
+# 
+# USING BEST PERFORMING ALGORITHM VERSIONS:
+# - ICD Logit v1 (icd_logit) - only version available
+# - PheNorm v1 (phenorm) - better than v2 in both informative scenarios  
+# - MAP v2 (surelda_map_prior) - better than v1, especially in rare scenarios
+# - SureLDA v1 (surelda) - clearly superior to v2 and v4 variants
+
+# Load required libraries
+library(ggplot2)
+library(dplyr)
+library(tidyr)
+library(gridExtra)
+library(grid)
+library(RColorBrewer)
+
+# Read and process the data
+data <- read_csv("combined_data.csv")
+
+# Filter for test data only (evaluation metrics)
+test_data <- data %>%
+  filter(set == "test", data_type == "ideal")
+
+# Scenario mapping
+scenario_labels <- c(
+  "nonrare_info" = "Common, Informative",
+  "nonrare_noninfo" = "Common, Non-informative",
+  "rare_info" = "Rare, Informative", 
+  "rare_noninfo" = "Rare, Non-informative"
+)
+
+# Define color schemes - EXACT MATCH
+algorithm_colors <- c(
+  "PheNorm" = "#66c2a5",  # Teal
+  "MAP"     = "#fc8d62",  # Orange
+  "SureLDA" = "#8da0cb"   # Light Blue/Purple
+)
+
+# Define consistent theme with larger fonts
+custom_theme <- theme_minimal() +
+  theme(
+    plot.title = element_text(size = 18, face = "bold", hjust = 0.5, margin = margin(b = 10)),
+    plot.subtitle = element_text(size = 14, hjust = 0.5, margin = margin(b = 20)),
+    axis.title = element_text(size = 14, face = "bold"),
+    axis.text = element_text(size = 12, face = "bold"),
+    legend.title = element_text(size = 14, face = "bold"),
+    legend.text = element_text(size = 12, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.major = element_line(color = "grey90", size = 0.5),
+    panel.grid.minor = element_blank(),
+    strip.text = element_text(size = 12, face = "bold"),
+    plot.margin = margin(20, 20, 20, 20)
+  )
+
+# FIGURE 1: Impact of Disease Prevalence on Algorithm Performance
+create_figure1 <- function() {
+  # Prepare data for Figure 1 (Disease Prevalence - Informative scenarios only)
+  fig1_data <- test_data %>%
+    filter(algorithm %in% c("surelda_map_prior", "phenorm", "surelda"),
+           scenario %in% c("nonrare_info", "rare_info")) %>%
+    mutate(
+      Algorithm = case_when(
+        algorithm == "surelda_map_prior" ~ "MAP",
+        algorithm == "phenorm" ~ "PheNorm",
+        algorithm == "surelda" ~ "SureLDA"
+      ),
+      Algorithm = factor(Algorithm, levels = c("PheNorm", "MAP", "SureLDA")),
+      Disease_Prevalence = ifelse(scenario == "nonrare_info", "Common Disease (40%)", "Rare Disease (5%)"),
+      Disease_Prevalence = factor(Disease_Prevalence, levels = c("Common Disease (40%)", "Rare Disease (5%)"))
+    ) %>%
+    select(Algorithm, Disease_Prevalence, auc_mean, auc_sd, precision_mean, precision_sd) %>%
+    pivot_longer(cols = c(auc_mean, precision_mean), 
+                 names_to = "Metric_Type", values_to = "Performance") %>%
+    mutate(
+      Metric = ifelse(Metric_Type == "auc_mean", "AUC", "Precision"),
+      SD = ifelse(Metric_Type == "auc_mean", auc_sd, precision_sd)
+    )
+  
+  # Create faceted plot - 2x2 layout
+  p1 <- ggplot(fig1_data, aes(x = Algorithm, y = Performance, fill = Algorithm)) +
+    geom_col(width = 0.7, color = "white", size = 0.5) +
+    geom_errorbar(aes(ymin = Performance - SD, ymax = Performance + SD),
+                  width = 0.25, size = 0.8) +
+    facet_grid(Metric ~ Disease_Prevalence) +
+    scale_fill_manual(values = algorithm_colors) +
+    scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, 0.25),
+                       labels = c("0.00", "0.25", "0.50", "0.75", "1.00")) +
+    labs(
+      title = "Impact of Disease Prevalence on Algorithm Performance",
+      subtitle = "Informative Labels, Simplified Data Generation",
+      y = "Performance Value",
+      x = "Algorithm",
+      fill = "Algorithm"
+    ) +
+    custom_theme +
+    theme(strip.background = element_rect(fill = "grey95", color = "white"))
+  
+  return(p1)
+}
+
+# FIGURE 2: Algorithm Performance Across All Challenge Scenarios
+create_figure2 <- function() {
+  # Prepare data for Figure 2 (Comprehensive Dashboard)
+  fig2_data <- test_data %>%
+    filter(algorithm %in% c("surelda_map_prior", "phenorm", "surelda")) %>%
+    mutate(
+      Algorithm = case_when(
+        algorithm == "surelda_map_prior" ~ "MAP",
+        algorithm == "phenorm" ~ "PheNorm",
+        algorithm == "surelda" ~ "SureLDA"
+      ),
+      Algorithm = factor(Algorithm, levels = c("PheNorm", "MAP", "SureLDA")),
+      Scenario = factor(recode(scenario, !!!scenario_labels), levels = scenario_labels)
+    ) %>%
+    select(Algorithm, Scenario, auc_mean, auc_sd, precision_mean, precision_sd) %>%
+    pivot_longer(cols = c(auc_mean, precision_mean), 
+                 names_to = "Metric_Type", values_to = "Performance") %>%
+    mutate(
+      Metric = ifelse(Metric_Type == "auc_mean", "Area Under the Curve (AUC)", "Precision"),
+      SD = ifelse(Metric_Type == "auc_mean", auc_sd, precision_sd)
+    )
+  
+  # Create faceted plot - 2x4 layout
+  p2 <- ggplot(fig2_data, aes(x = Algorithm, y = Performance, fill = Algorithm)) +
+    geom_col(width = 0.7, color = "white", size = 0.5) +
+    geom_errorbar(aes(ymin = Performance - SD, ymax = Performance + SD),
+                  width = 0.25, size = 0.8) +
+    geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", size = 0.8, alpha = 0.7) +
+    facet_grid(Metric ~ Scenario) +
+    scale_fill_manual(values = algorithm_colors) +
+    scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, 0.5),
+                       labels = c("0.0", "0.5", "1.0")) +
+    labs(
+      title = "Algorithm Performance Across All Challenge Scenarios",
+      subtitle = "Discrimination (AUC) and Precision Analysis (Simplified Data Generation)",
+      y = "Performance Value",
+      x = "Algorithm",
+      fill = "Algorithm"
+    ) +
+    custom_theme +
+    theme(
+      strip.background = element_rect(fill = "grey95", color = "white"),
+      panel.spacing = unit(0.5, "lines")
+    )
+  
+  return(p2)
+}
+
+# FIGURE 3: Impact of Silver Label Informativeness on Algorithm Performance  
+create_figure3 <- function() {
+  # Prepare data for Figure 3 (Informativeness - Common disease scenarios only)
+  fig3_data <- test_data %>%
+    filter(algorithm %in% c("surelda_map_prior", "phenorm", "surelda"),
+           scenario %in% c("nonrare_info", "nonrare_noninfo")) %>%
+    mutate(
+      Algorithm = case_when(
+        algorithm == "surelda_map_prior" ~ "MAP",
+        algorithm == "phenorm" ~ "PheNorm",
+        algorithm == "surelda" ~ "SureLDA"
+      ),
+      Algorithm = factor(Algorithm, levels = c("MAP", "PheNorm", "SureLDA")),
+      Scenario_Type = ifelse(scenario == "nonrare_info", "Common, Informative", "Common, Non-informative"),
+      Scenario_Type = factor(Scenario_Type, levels = c("Common, Informative", "Common, Non-informative"))
+    )
+  
+  # Create faceted plot - 1x2 layout
+  p3 <- ggplot(fig3_data, aes(x = Algorithm, y = auc_mean, fill = Algorithm)) +
+    geom_col(width = 0.7, color = "white", size = 0.5) +
+    geom_errorbar(aes(ymin = auc_mean - auc_sd, ymax = auc_mean + auc_sd),
+                  width = 0.25, size = 0.8) +
+    geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", size = 1) +
+    facet_wrap(~ Scenario_Type, ncol = 2) +
+    scale_fill_manual(values = algorithm_colors) +
+    scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, 0.2),
+                       labels = c("0.0", "0.2", "0.4", "0.6", "0.8", "1.0")) +
+    labs(
+      title = "Impact of Silver Label Informativeness on Algorithm Performance",
+      subtitle = "Common Disease Prevalence, Simplified Data Generation",
+      y = "Area Under the Curve (AUC)",
+      x = "Algorithm",
+      fill = "Algorithm"
+    ) +
+    custom_theme +
+    theme(strip.background = element_rect(fill = "grey95", color = "white"))
+  
+  return(p3)
+}
+
+# FIGURE 4: Baseline Comparison - AUC across all scenarios
+create_figure4 <- function() {
+  # Prepare data for Figure 4 (Baseline comparison)
+  fig4_data <- test_data %>%
+    filter(algorithm %in% c("surelda_map_prior", "phenorm", "surelda")) %>%
+    mutate(
+      Algorithm = case_when(
+        algorithm == "surelda_map_prior" ~ "MAP",
+        algorithm == "phenorm" ~ "PheNorm", 
+        algorithm == "surelda" ~ "SureLDA"
+      ),
+      Scenario = factor(recode(scenario, !!!scenario_labels),
+                       levels = scenario_labels)
+    ) %>%
+    select(Algorithm, Scenario, auc_mean, auc_sd)
+  
+  # Create the plot
+  p4 <- ggplot(fig4_data, aes(x = Scenario, y = auc_mean, fill = Algorithm)) +
+    geom_col(position = position_dodge(width = 0.8), width = 0.7, color = "white", size = 0.5) +
+    geom_errorbar(aes(ymin = auc_mean - auc_sd, ymax = auc_mean + auc_sd),
+                  position = position_dodge(width = 0.8), width = 0.25, size = 0.8) +
+    scale_fill_manual(values = algorithm_colors) +
+    scale_y_continuous(limits = c(0, 1.05), breaks = seq(0, 1, 0.25),
+                       labels = c("0.00", "0.25", "0.50", "0.75", "1.00")) +
+    labs(
+      title = "Baseline Comparison: Area Under ROC Curve (AUC)",
+      subtitle = "Performance in Simplified Data Generation Model",
+      y = "Area Under ROC Curve (AUC)",
+      x = "Scenario",
+      fill = "Algorithm"
+    ) +
+    custom_theme
+  
+  return(p4)
+}
+
+# Generate all figures in the EXACT same order as your images
+cat("Generating Figure 1: Impact of Disease Prevalence...\n")
+figure1 <- create_figure1()
+
+cat("Generating Figure 2: Algorithm Performance Across All Scenarios...\n")
+figure2 <- create_figure2()
+
+cat("Generating Figure 3: Impact of Silver Label Informativeness...\n") 
+figure3 <- create_figure3()
+
+cat("Generating Figure 4: Baseline Comparison...\n")
+figure4 <- create_figure4()
+
+# Display the figures
+print(figure1)
+print(figure2)
+print(figure3)
+print(figure4)
+
+# Create plots directory if it doesn't exist
+if (!dir.exists("thesis/plots")) {
+  dir.create("thesis/plots")
+  cat("Created 'plots' directory\n")
+}
+
+# Save the figures as high-quality PDFs with exact naming
+cat("Saving figures to plots folder...\n")
+
+ggsave("thesis/plots/figure_prevalence_impact_combined.pdf", figure1, 
+       width = 10, height = 8, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_comprehensive_dashboard_focused.pdf", figure2, 
+       width = 16, height = 10, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_informativeness_impact.pdf", figure3, 
+       width = 12, height = 6, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_9_baseline_comparison.pdf", figure4, 
+       width = 12, height = 8, units = "in", dpi = 300)
+
+# Optional: Save as PNG files for presentations
+ggsave("thesis/plots/figure_prevalence_impact_combined.png", figure1, 
+       width = 10, height = 8, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_comprehensive_dashboard_focused.png", figure2, 
+       width = 16, height = 10, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_informativeness_impact.png", figure3, 
+       width = 12, height = 6, units = "in", dpi = 300)
+
+ggsave("thesis/plots/figure_9_baseline_comparison.png", figure4, 
+       width = 12, height = 8, units = "in", dpi = 300)
+
+cat("All figures generated and saved to 'plots' folder successfully!\n")
+cat("Files saved:\n")
+cat("- plots/figure_prevalence_impact_combined.pdf/.png\n")
+cat("- plots/figure_comprehensive_dashboard_focused.pdf/.png\n") 
+cat("- plots/figure_informativeness_impact.pdf/.png\n")
+cat("- plots/figure_9_baseline_comparison.pdf/.png\n")
+
+# Print summary statistics
+cat("\nSummary of algorithm performance:\n")
+summary_stats <- test_data %>%
+  filter(algorithm %in% c("surelda_map_prior", "phenorm", "surelda")) %>%
+  group_by(algorithm) %>%
+  summarise(
+    mean_auc = round(mean(auc_mean, na.rm = TRUE), 3),
+    mean_precision = round(mean(precision_mean, na.rm = TRUE), 3),
+    mean_recall = round(mean(recall_mean, na.rm = TRUE), 3),
+    mean_f1 = round(mean(f1_mean, na.rm = TRUE), 3),
+    .groups = 'drop'
+  ) %>%
+  mutate(
+    Algorithm = case_when(
+      algorithm == "surelda_map_prior" ~ "MAP",
+      algorithm == "phenorm" ~ "PheNorm",
+      algorithm == "surelda" ~ "SureLDA"
+    )
+  ) %>%
+  select(-algorithm)
+
+print(summary_stats)
+```
+
+## Performance Metric Table for LDA&ori Data Generation
+
+```{r table_lda_data_gen}
+library(dplyr)
+library(knitr)
+
+data <- read_csv("combined_data.csv")
+
+test_data <- data %>% filter(set == "test")
+lda_data <- test_data %>% filter(data_type == "LDA")
+ori_data <- test_data %>% filter(data_type == "ori")
+
+format_mean_sd <- function(mean_val, sd_val, decimals = 3) {
+  if (is.na(mean_val) || is.na(sd_val)) {
+    return("NA")
+  }
+  sprintf("%.3f (%.3f)", round(mean_val, decimals), round(sd_val, decimals))
+}
+
+algorithm_mapping <- list(
+  "icd_logit" = "ICD Logit (v1)",           
+  "map" = "MAP (v1)",                       
+  "phenorm" = "PheNorm (v1)",               
+  "surelda" = "SureLDA (v1)",               
+  "surelda_map" = "SureLDA (v2)",           
+  "surelda_map_p" = "SureLDA (v4)",         
+  "surelda_map_prior" = "MAP (v2)",         
+  "surelda_prior" = "PheNorm (v2)",
+  "surelda_phenorm" = "SureLDA (v3)"
+)
+
+scenario_mapping <- list(
+  "nonrare_info" = "Non-rare, Informative Scenario",
+  "nonrare_noninfo" = "Non-rare, Non-informative Scenario",
+  "rare_info" = "Rare, Informative Scenario",
+  "rare_noninfo" = "Rare, Non-informative Scenario"
+)
+
+create_publication_table <- function(scenario_data, scenario_name) {
+  
+  algorithm_order <- c(
+    "icd_logit",
+    "phenorm",
+    "surelda_prior",
+    "map",
+    "surelda_map_prior",
+    "surelda",
+    "surelda_map",
+    "surelda_phenorm",
+    "surelda_map_p"
+  )
+  
+  result_table <- data.frame(
+    Algorithm = character(),
+    AUC = character(),
+    F1 = character(),
+    Precision = character(),
+    Recall = character(),
+    `Prob MSE` = character(),
+    stringsAsFactors = FALSE
+  )
+  
+  scenario_subset <- scenario_data %>% filter(scenario == scenario_name)
+  
+  for (algorithm in algorithm_order) {
+    row_data <- scenario_subset %>% filter(algorithm == !!algorithm)
+    
+    if (nrow(row_data) > 0) {
+      row_data <- row_data[1, ]
+      alg_name <- algorithm_mapping[[algorithm]]
+      if (is.null(alg_name)) alg_name <- algorithm
+      
+      new_row <- data.frame(
+        Algorithm = alg_name,
+        AUC = format_mean_sd(row_data$auc_mean, row_data$auc_sd),
+        F1 = format_mean_sd(row_data$f1_mean, row_data$f1_sd),
+        Precision = format_mean_sd(row_data$precision_mean, row_data$precision_sd),
+        Recall = format_mean_sd(row_data$recall_mean, row_data$recall_sd),
+        Prob.MSE = format_mean_sd(row_data$prob_mse_mean, row_data$prob_mse_sd),
+        stringsAsFactors = FALSE
+      )
+      
+      result_table <- rbind(result_table, new_row)
+    }
+  }
+  
+  return(result_table)
+}
+
+save_table_latex <- function(table_data, scenario_name, data_type, output_dir) {
+  scenario_title <- scenario_mapping[[scenario_name]]
+  if (is.null(scenario_title)) scenario_title <- scenario_name
+  
+  data_type_mapping <- list("lda" = "surelda", "ori" = "complex")
+  mapped_data_type <- data_type_mapping[[data_type]]
+  if (is.null(mapped_data_type)) mapped_data_type <- data_type
+  
+  if (scenario_name %in% c("nonrare_info", "nonrare_noninfo")) {
+    info_type <- ifelse(scenario_name == "nonrare_info", "informative", "noninformative")
+    base_name <- sprintf("table_%s_datagen_common_%s", mapped_data_type, info_type)
+  } else {
+    figure_numbers <- list(
+      "rare_info_surelda" = 3,
+      "rare_noninfo_surelda" = 4, 
+      "rare_info_complex" = 5,
+      "rare_noninfo_complex" = 6
+    )
+    
+    key <- paste(scenario_name, mapped_data_type, sep = "_")
+    figure_num <- figure_numbers[[key]]
+    
+    scenario_part <- gsub("_", "_", gsub("noninfo", "non-informative", gsub("info", "informative", scenario_name)))
+    base_name <- sprintf("figure_table_%d_%s_%s", figure_num, scenario_part, mapped_data_type)
+  }
+  
+  latex_file <- file.path(output_dir, paste0(base_name, ".tex"))
+  sink(latex_file)
+  
+  caption_text <- paste("Performance metrics for each algorithm in the", 
+                       tolower(scenario_title), 
+                       sprintf("(%s data generation)", toupper(mapped_data_type)))
+  
+  latex_table <- kable(table_data, 
+                      format = "latex",
+                      booktabs = TRUE,
+                      row.names = FALSE,
+                      caption = caption_text)
+  cat(latex_table)
+  sink()
+}
+
+output_dir <- "thesis/performance_tables"
+
+if (!dir.exists(output_dir)) {
+  dir.create(output_dir, recursive = TRUE)
+}
+
+scenarios <- c("rare_info", "rare_noninfo", "nonrare_info", "nonrare_noninfo")
+
+for (scenario in scenarios) {
+  scenario_title <- scenario_mapping[[scenario]]
+  if (is.null(scenario_title)) scenario_title <- scenario
+  
+  table_data <- create_publication_table(lda_data, scenario)
+  save_table_latex(table_data, scenario, "lda", output_dir)
+}
+
+for (scenario in scenarios) {
+  scenario_title <- scenario_mapping[[scenario]]
+  if (is.null(scenario_title)) scenario_title <- scenario
+  
+  table_data <- create_publication_table(ori_data, scenario)
+  save_table_latex(table_data, scenario, "ori", output_dir)
+}
+```
+
+## Data combine
+
+```{r save_table_as_image}
+library(dplyr)
+library(xtable)      # For basic LaTeX tables
+library(kableExtra)  # For advanced LaTeX tables
+library(stargazer) 
+combined_data <- read_csv("combined_data.csv")
+latex_table_basic <- xtable(combined_data, 
+                           caption = "Combined Simulation Results",
+                           label = "tab:combined_results")
+
+# Save to .tex file
+print(latex_table_basic, 
+      file = "combined_results_basic.tex",
+      include.rownames = FALSE,
+      table.placement = "H",
+      caption.placement = "top")
+```
+
+# AUC Figure Generation
+
+```{r modified_paper_figures}
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+combined_data <- read_csv("combined_data.csv", show_col_types = FALSE)
+test_data <- combined_data %>% filter(set == "test")
+
+algorithm_mapping <- list(
+  "icd_logit" = "ICD Logit",
+  "map" = "MAP v1",
+  "surelda_map_prior" = "MAP v2",
+  "phenorm" = "PheNorm v1",
+  "surelda_prior" = "PheNorm v2",
+  "surelda" = "SureLDA v1",
+  "surelda_map" = "SureLDA v2",
+  "surelda_phenorm" = "SureLDA v3",
+  "surelda_map_p" = "SureLDA v4"
+)
+
+scenario_mapping <- list(
+  "nonrare_info" = "Common Informative",
+  "nonrare_noninfo" = "Common Noninformative",
+  "rare_info" = "Rare Informative", 
+  "rare_noninfo" = "Rare Noninformative"
+)
+
+data_type_mapping <- list(
+  "ideal" = "Simplified",
+  "LDA" = "sureLDA",
+  "ori" = "Complex"
+)
+
+algorithm_order_grouped <- c(
+  "ICD Logit", 
+  "PheNorm v1", "PheNorm v2",
+  "MAP v1", "MAP v2",
+  "SureLDA v1", "SureLDA v2", "SureLDA v3", "SureLDA v4"
+)
+
+scenario_order <- c("Common Informative", "Common Noninformative", "Rare Informative", "Rare Noninformative")
+
+morandi_warm_colors <- c(
+  "ICD Logit" = "#7D6C6C",
+  "MAP v1" = "#B8906B",
+  "MAP v2" = "#CCA885",
+  "PheNorm v1" = "#9CAF88",
+  "PheNorm v2" = "#B5C7A0",
+  "SureLDA v1" = "#A6A28A",
+  "SureLDA v2" = "#BCB8A2",
+  "SureLDA v3" = "#CCC8B8",
+  "SureLDA v4" = "#DDD9CC"
+)
+
+plot_data <- test_data %>%
+  filter(algorithm %in% names(algorithm_mapping)) %>%
+  mutate(
+    Algorithm = factor(recode(algorithm, !!!algorithm_mapping), levels = algorithm_order_grouped),
+    Scenario = factor(recode(scenario, !!!scenario_mapping), levels = scenario_order),
+    Data_Type = factor(recode(data_type, !!!data_type_mapping), levels = c("Simplified", "sureLDA", "Complex"))
+  ) %>%
+  select(Algorithm, Scenario, Data_Type, auc_mean, auc_sd) %>%
+  filter(!is.na(auc_mean))
+
+auc_data <- plot_data %>%
+  group_by(Algorithm, Scenario, Data_Type) %>%
+  summarise(
+    auc_mean = first(auc_mean[!is.na(auc_mean)]),
+    auc_sd = first(auc_sd[!is.na(auc_sd)]),
+    .groups = 'drop'
+  ) %>%
+  filter(!is.na(auc_mean), !is.na(auc_sd))
+
+create_version_labels <- function(algs) {
+  result <- character(length(algs))
+  for(i in seq_along(algs)) {
+    if(algs[i] == "ICD Logit") result[i] <- "ICD"
+    else if(algs[i] == "PheNorm v1") result[i] <- "v1\nPheNorm"  
+    else if(algs[i] == "PheNorm v2") result[i] <- "v2\n"
+    else if(algs[i] == "MAP v1") result[i] <- "v1\nMAP"
+    else if(algs[i] == "MAP v2") result[i] <- "v2\n"
+    else if(algs[i] == "SureLDA v1") result[i] <- "v1\nSureLDA"
+    else if(algs[i] == "SureLDA v2") result[i] <- "v2\n"
+    else if(algs[i] == "SureLDA v3") result[i] <- "v3\n"
+    else if(algs[i] == "SureLDA v4") result[i] <- "v4\n"
+    else result[i] <- ""
+  }
+  return(result)
+}
+
+auc_plot <- ggplot(auc_data, aes(x = Algorithm, y = auc_mean, fill = Algorithm)) +
+  geom_vline(xintercept = 1.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_vline(xintercept = 3.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_vline(xintercept = 5.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_col(width = 0.7, color = "white", linewidth = 0.5) +
+  geom_errorbar(aes(ymin = pmax(0.45, auc_mean - auc_sd), ymax = pmin(1, auc_mean + auc_sd)),
+                width = 0.2, linewidth = 0.6, alpha = 0.8, color = "black") +
+  geom_hline(yintercept = 0.5, linetype = "dashed", color = "red", linewidth = 0.6, alpha = 0.8) +
+  facet_grid(Scenario ~ Data_Type, scales = "fixed") +
+  scale_fill_manual(values = morandi_warm_colors) +
+  scale_y_continuous(breaks = seq(0.5, 1, 0.1)) +
+  coord_cartesian(ylim = c(0.45, 1.05)) +
+  scale_x_discrete(labels = create_version_labels) +
+  labs(title = "Algorithm Performance: AUC", y = "AUC", x = "Algorithm", fill = "Algorithm") +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(size = 28, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 22, face = "bold"),
+    axis.text.x = element_text(size = 16, face = "bold", lineheight = 1.2, margin = margin(t = 15)),
+    axis.text.y = element_text(size = 18, face = "bold"),
+    strip.text = element_text(size = 20, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.spacing = unit(1.2, "lines"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    plot.margin = margin(30, 30, 30, 30),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+if (!dir.exists("thesis/plots")) dir.create("thesis/plots", recursive = TRUE)
+ggsave("thesis/plots/auc_grouped_y045.png", auc_plot, width = 26, height = 18, dpi = 300)
+```
+
+# MSE Figure Generation
+
+```{r modified_paper_figures_mse}
+library(ggplot2)
+library(dplyr)
+library(readr)
+
+combined_data <- read_csv("combined_data.csv", show_col_types = FALSE)
+test_data <- combined_data %>% filter(set == "test")
+
+algorithm_mapping <- list(
+  "icd_logit" = "ICD Logit",
+  "map" = "MAP v1",
+  "surelda_map_prior" = "MAP v2",
+  "phenorm" = "PheNorm v1",
+  "surelda_prior" = "PheNorm v2",
+  "surelda" = "SureLDA v1",
+  "surelda_map" = "SureLDA v2",
+  "surelda_phenorm" = "SureLDA v3",
+  "surelda_map_p" = "SureLDA v4"
+)
+
+scenario_mapping <- list(
+  "nonrare_info" = "Common Informative",
+  "nonrare_noninfo" = "Common Noninformative",
+  "rare_info" = "Rare Informative", 
+  "rare_noninfo" = "Rare Noninformative"
+)
+
+data_type_mapping <- list(
+  "ideal" = "Simplified",
+  "LDA" = "sureLDA",
+  "ori" = "Complex"
+)
+
+algorithm_order_grouped <- c(
+  "ICD Logit", 
+  "PheNorm v1", "PheNorm v2",
+  "MAP v1", "MAP v2",
+  "SureLDA v1", "SureLDA v2", "SureLDA v3", "SureLDA v4"
+)
+
+scenario_order <- c("Common Informative", "Common Noninformative", "Rare Informative", "Rare Noninformative")
+
+morandi_warm_colors <- c(
+  "ICD Logit" = "#7D6C6C",
+  "MAP v1" = "#B8906B",
+  "MAP v2" = "#CCA885",
+  "PheNorm v1" = "#9CAF88",
+  "PheNorm v2" = "#B5C7A0",
+  "SureLDA v1" = "#A6A28A",
+  "SureLDA v2" = "#BCB8A2",
+  "SureLDA v3" = "#CCC8B8",
+  "SureLDA v4" = "#DDD9CC"
+)
+
+plot_data <- test_data %>%
+  filter(algorithm %in% names(algorithm_mapping)) %>%
+  mutate(
+    Algorithm = factor(recode(algorithm, !!!algorithm_mapping), levels = algorithm_order_grouped),
+    Scenario = factor(recode(scenario, !!!scenario_mapping), levels = scenario_order),
+    Data_Type = factor(recode(data_type, !!!data_type_mapping), levels = c("Simplified", "sureLDA", "Complex"))
+  ) %>%
+  select(Algorithm, Scenario, Data_Type, prob_mse_mean, prob_mse_sd) %>%
+  filter(!is.na(prob_mse_mean))
+
+mse_data <- plot_data %>%
+  group_by(Algorithm, Scenario, Data_Type) %>%
+  summarise(
+    mse_mean = first(prob_mse_mean[!is.na(prob_mse_mean)]),
+    mse_sd = first(prob_mse_sd[!is.na(prob_mse_sd)]),
+    .groups = 'drop'
+  ) %>%
+  filter(!is.na(mse_mean), !is.na(mse_sd))
+
+create_version_labels <- function(algs) {
+  result <- character(length(algs))
+  for(i in seq_along(algs)) {
+    if(algs[i] == "ICD Logit") result[i] <- "ICD"
+    else if(algs[i] == "PheNorm v1") result[i] <- "v1\nPheNorm"  
+    else if(algs[i] == "PheNorm v2") result[i] <- "v2\n"
+    else if(algs[i] == "MAP v1") result[i] <- "v1\nMAP"
+    else if(algs[i] == "MAP v2") result[i] <- "v2\n"
+    else if(algs[i] == "SureLDA v1") result[i] <- "v1\nSureLDA"
+    else if(algs[i] == "SureLDA v2") result[i] <- "v2\n"
+    else if(algs[i] == "SureLDA v3") result[i] <- "v3\n"
+    else if(algs[i] == "SureLDA v4") result[i] <- "v4\n"
+    else result[i] <- ""
+  }
+  return(result)
+}
+
+mse_plot <- ggplot(mse_data, aes(x = Algorithm, y = mse_mean, fill = Algorithm)) +
+  geom_vline(xintercept = 1.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_vline(xintercept = 3.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_vline(xintercept = 5.5, linetype = "solid", color = "gray80", linewidth = 1, alpha = 0.6) +
+  geom_col(width = 0.7, color = "white", linewidth = 0.5) +
+  geom_errorbar(aes(ymin = pmax(0, mse_mean - mse_sd), ymax = mse_mean + mse_sd),
+                width = 0.2, linewidth = 0.6, alpha = 0.8, color = "black") +
+  facet_grid(Scenario ~ Data_Type, scales = "fixed") +
+  scale_fill_manual(values = morandi_warm_colors) +
+  scale_x_discrete(labels = create_version_labels) +
+  labs(title = "Algorithm Performance: MSE", y = "MSE", x = "Algorithm", fill = "Algorithm") +
+  theme_minimal(base_size = 18) +
+  theme(
+    plot.title = element_text(size = 28, face = "bold", hjust = 0.5),
+    axis.title = element_text(size = 22, face = "bold"),
+    axis.text.x = element_text(size = 16, face = "bold", lineheight = 1.2, margin = margin(t = 15)),
+    axis.text.y = element_text(size = 18, face = "bold"),
+    strip.text = element_text(size = 20, face = "bold"),
+    legend.position = "bottom",
+    panel.grid.major.y = element_line(color = "grey90", linewidth = 0.5),
+    panel.grid.major.x = element_blank(),
+    panel.spacing = unit(1.2, "lines"),
+    panel.border = element_rect(color = "black", fill = NA, linewidth = 0.8),
+    plot.margin = margin(30, 30, 30, 30),
+    panel.background = element_rect(fill = "white", color = NA),
+    plot.background = element_rect(fill = "white", color = NA)
+  )
+
+if (!dir.exists("thesis/plots")) dir.create("thesis/plots", recursive = TRUE)
+ggsave("thesis/plots/mse_grouped.png", mse_plot, width = 26, height = 18, dpi = 300)
+
+```
