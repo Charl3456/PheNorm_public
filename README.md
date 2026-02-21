@@ -99,7 +99,9 @@ Install the phenotyping method packages (see each package's documentation for in
 
 ```r
 # PheNorm, MAP, sureLDA
-# (add GitHub/CRAN installation instructions here)
+install.packages("PheNorm")   # v0.1.0
+install.packages("MAP")       # v1.0.0, requires R >= 3.4.0
+install.packages("sureLDA")   # v0.1.0-1, requires R >= 3.0
 ```
 
 ### 2. Run a Single Simulation Batch
@@ -160,16 +162,6 @@ Each `.RData` file contains:
 
 - **`results_narm`** / **`results_epsilon`** — long-format data frame with one row per (replication × data type × scenario × algorithm × train/test set)
 - **`summary_stats_narm`** / **`summary_stats_epsilon`** — grouped summary with mean and SD of all metrics across replications
-
----
-
-## Key Findings (Summary)
-
-- No single method dominated across all scenarios.
-- Under **simplified data**, PheNorm and MAP achieved near-perfect AUC; sureLDA was unstable and prone to overfitting.
-- Under **complex data with rare outcomes and informative labels** — the most practically relevant setting — sureLDA-v3 (sureLDA with PheNorm-v2 priors) achieved the highest AUC (0.95) and F1 (0.64); PheNorm-v2 had the best probability calibration (MSE = 0.14).
-- Performance varied by up to 0.28 AUC points depending on tuning parameter choices, underscoring the importance of evaluating multiple configurations rather than relying on defaults.
-- Algorithm-guided probability sampling for chart review selected encounters with higher rates of anaphylaxis-related NLP mentions and emergency treatments compared to simple random sampling.
 
 ---
 
