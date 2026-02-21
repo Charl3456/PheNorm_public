@@ -165,6 +165,12 @@ Each `.RData` file contains:
 
 ---
 
+## Data Availability
+
+The dataset analyzed during this study is not publicly available because it contains detailed information from the electronic health record and is governed by HIPAA. Data are however available from the authors upon reasonable request, with permission of the health system and fully executed data use agreement.
+
+---
+
 ## Funding
 
 Supported by Task Order 75D30122F00001 from the U.S. Centers for Disease Control and Prevention (CDC). The content is solely the responsibility of the authors and does not necessarily represent the official views of the CDC or the U.S. Government.
